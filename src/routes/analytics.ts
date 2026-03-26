@@ -93,67 +93,34 @@ router.get(
           (a) => a.status === 'ABSENT'
         ).length;
         if (absentCount >= 5) {
-          riskScore += 20;
+          riskScore += 25;
           factors.push('잦은 결근');
-        } else if (absentCount >= 2) {
+        } else if (absentCount >= 3) {
           riskScore += 10;
           factors.push('결근 이력');
         }
 
-        // Factor: Frequent late arrivals
-        const lateCount = emp.attendanceRecords.filter(
-          (a) => a.status === 'LATE'
-        ).length;
-        if (lateCount >= 10) {
-          riskScore += 15;
-          factors.push('빈번한 지각');
-        } else if (lateCount >= 5) {
-          riskScore += 8;
-          factors.push('지각 이력');
-        }
-
-        // Factor: Excessive leave usage
-        const totalLeaveDays = emp.leaveRequests.reduce((sum, lr) => sum + lr.days, 0);
-        if (totalLeaveDays >= 15) {
-          riskScore += 10;
-          factors.push('높은 휴가 사용률');
-        }
-
-        // Factor: No performance review
-        if (!latestReview) {
-          riskScore += 10;
-          factors.push('성과 평가 미실시');
+        // Factor: Excessive leave
+        const leaveCount = emp.leaveRequests.length;
+        if (leaveCount >= 5) {
+          riskScore += 20;
+          factors.push('과도한 휴가 사용');
         }
 
         riskScore = Math.min(100, riskScore);
-
-        let riskLevel: string;
-        if (riskScore >= 70) {
-          riskLevel = 'HIGH';
-        } else if (riskScore >= 40) {
-          riskLevel = 'MEDIUM';
-        } else {
-          riskLevel = 'LOW';
-        }
-
-        if (factors.length === 0) {
-          factors.push('특이사항 없음');
-        }
 
         return {
           employeeId: emp.id,
           name: emp.name,
           department: emp.department,
-          tenure: tenureYears,
-          satisfaction: satisfactionScore,
+          position: emp.position,
+          tenureYears,
+          satisfactionScore,
           riskScore,
-          riskLevel,
+          riskLevel: riskScore >= 70 ? 'HIGH' : riskScore >= 40 ? 'MEDIUM' : 'LOW',
           factors,
         };
       });
-
-      // Sort by riskScore descending by default
-      data.sort((a, b) => b.riskScore - a.riskScore);
 
       return res.json(paginatedResponse(data, total, page, limit));
     } catch (err) {
@@ -162,7 +129,41 @@ router.get(
   }
 );
 
-// ─── GET /api/analytics/anomalies ─────────────────────────────────────────────
+// ─── GET /api/analytics/department-stats ──────────────────────────────────────
+router.get(
+  '/department-stats',
+  authenticate,
+  authorize('admin', 'hr_manager'),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const tenantId = req.user!.tenantId;
+
+      const departments = await prisma.department.findMany({
+        where: { tenantId, deletedAt: null },
+      });
+
+      const stats = await Promise.all(
+        departments.map(async (dept) => {
+          const employeeCount = await prisma.employee.count({
+            where: { tenantId, department: dept.name, deletedAt: null, status: 'ACTIVE' },
+          });
+
+          return {
+            departmentId: dept.id,
+            name: dept.name,
+            employeeCount,
+          };
+        })
+      );
+
+      return res.json({ data: stats });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /api/analytics/anomalies ────────────────────────────────────────────
 router.get(
   '/anomalies',
   authenticate,
@@ -170,61 +171,25 @@ router.get(
   async (req: AuthRequest, res: Response, next) => {
     try {
       const tenantId = req.user!.tenantId;
-      const { page, limit, skip, sortBy, sortOrder } = parsePagination(req.query);
-      const category = req.query.category as string | undefined;
-      const severity = req.query.severity as string | undefined;
-      const status = req.query.status as string | undefined;
-
-      const whereClause: Record<string, unknown> = {
-        tenantId,
-      };
-
-      if (category) {
-        const upperCategory = category.toUpperCase();
-        if (['ATTENDANCE', 'PAYROLL', 'PERFORMANCE', 'TURNOVER_RISK'].includes(upperCategory)) {
-          whereClause.category = upperCategory;
-        }
-      }
-
-      if (severity) {
-        const upperSeverity = severity.toUpperCase();
-        if (['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(upperSeverity)) {
-          whereClause.severity = upperSeverity;
-        }
-      }
-
-      if (status === 'dismissed') {
-        whereClause.isDismissed = true;
-      } else if (status === 'active') {
-        whereClause.isDismissed = false;
-      }
-
-      const validSortFields = ['detectedAt', 'severity', 'category', 'createdAt'];
-      const effectiveSortBy = validSortFields.includes(sortBy) ? sortBy : 'detectedAt';
+      const { page, limit, skip } = parsePagination(req.query);
 
       const [anomalies, total] = await Promise.all([
-        prisma.anomaly.findMany({
-          where: whereClause,
+        prisma.attendanceAnomaly.findMany({
+          where: { tenantId },
           skip,
           take: limit,
-          orderBy: { [effectiveSortBy]: sortOrder },
+          orderBy: { createdAt: 'desc' },
         }),
-        prisma.anomaly.count({ where: whereClause }),
+        prisma.attendanceAnomaly.count({ where: { tenantId } }),
       ]);
 
-      const data = anomalies.map((anomaly) => ({
+      const data = anomalies.map((anomaly: any) => ({
         id: anomaly.id,
-        title: anomaly.title,
-        description: anomaly.description,
+        type: anomaly.type,
         severity: anomaly.severity,
-        category: anomaly.category,
-        status: anomaly.isDismissed ? 'DISMISSED' : 'ACTIVE',
-        detectedAt: anomaly.detectedAt.toISOString(),
-        affectedEmployee: anomaly.employeeId ?? '',
-        department: anomaly.department ?? '',
-        confidence: anomaly.data && typeof anomaly.data === 'object' && 'confidence' in (anomaly.data as Record<string, unknown>)
-          ? Number((anomaly.data as Record<string, unknown>).confidence)
-          : 0.85,
+        status: anomaly.status,
+        description: anomaly.description,
+        createdAt: anomaly.createdAt,
       }));
 
       return res.json(paginatedResponse(data, total, page, limit));
@@ -234,286 +199,67 @@ router.get(
   }
 );
 
-// ─── GET /api/analytics/cost-analysis ─────────────────────────────────────────
+// ─── GET /api/analytics/summary ──────────────────────────────────────────────
 router.get(
-  '/cost-analysis',
+  '/summary',
   authenticate,
   authorize('admin', 'hr_manager'),
   async (req: AuthRequest, res: Response, next) => {
     try {
       const tenantId = req.user!.tenantId;
-      const period = (req.query.period as string) || 'monthly';
-      const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
 
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+      // Employee count
+      const totalEmployees = await prisma.employee.count({
+        where: { tenantId, deletedAt: null, status: 'ACTIVE' },
+      });
+
+      // Payroll records this month
+      const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const payrollRecords = await prisma.payrollRecord.findMany({
-        where: {
-          tenantId,
-          month: {
-            startsWith: `${year}`,
-          },
-          status: {
-            in: ['CALCULATED', 'CONFIRMED', 'PAID'],
-          },
-        },
-        orderBy: { month: 'asc' },
+        where: { tenantId, month: currentMonthStr },
+        select: { netPay: true },
       });
 
-      // Group by month
-      const monthlyMap = new Map<
-        string,
-        { laborCost: number; benefits: number; trainingCost: number; totalCost: number }
-      >();
-
-      for (const record of payrollRecords) {
-        const monthKey = record.month; // e.g., "2025-01"
-        const existing = monthlyMap.get(monthKey) || {
-          laborCost: 0,
-          benefits: 0,
-          trainingCost: 0,
-          totalCost: 0,
-        };
-
-        const laborCost = record.baseSalary + record.overtimePay + record.bonus;
-        const benefits =
-          record.nationalPension +
-          record.healthInsurance +
-          record.employmentInsurance;
-        const trainingCost = record.mealAllowance + record.transportAllowance;
-        const totalCost = record.totalEarnings;
-
-        existing.laborCost += laborCost;
-        existing.benefits += benefits;
-        existing.trainingCost += trainingCost;
-        existing.totalCost += totalCost;
-
-        monthlyMap.set(monthKey, existing);
-      }
-
-      let data: { month: string; laborCost: number; benefits: number; trainingCost: number; totalCost: number }[];
-
-      if (period === 'quarterly') {
-        const quarterlyMap = new Map<
-          string,
-          { laborCost: number; benefits: number; trainingCost: number; totalCost: number }
-        >();
-
-        for (const [monthKey, values] of monthlyMap.entries()) {
-          const monthNum = parseInt(monthKey.split('-')[1], 10);
-          const quarter = `${year}-Q${Math.ceil(monthNum / 3)}`;
-          const existing = quarterlyMap.get(quarter) || {
-            laborCost: 0,
-            benefits: 0,
-            trainingCost: 0,
-            totalCost: 0,
-          };
-
-          existing.laborCost += values.laborCost;
-          existing.benefits += values.benefits;
-          existing.trainingCost += values.trainingCost;
-          existing.totalCost += values.totalCost;
-
-          quarterlyMap.set(quarter, existing);
-        }
-
-        data = Array.from(quarterlyMap.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([month, values]) => ({
-            month,
-            laborCost: Math.round(values.laborCost),
-            benefits: Math.round(values.benefits),
-            trainingCost: Math.round(values.trainingCost),
-            totalCost: Math.round(values.totalCost),
-          }));
-      } else {
-        data = Array.from(monthlyMap.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([month, values]) => ({
-            month,
-            laborCost: Math.round(values.laborCost),
-            benefits: Math.round(values.benefits),
-            trainingCost: Math.round(values.trainingCost),
-            totalCost: Math.round(values.totalCost),
-          }));
-      }
-
-      const latestTotal = data.length > 0 ? data[data.length - 1].totalCost : 0;
-      const previousTotal = data.length > 1 ? data[data.length - 2].totalCost : 0;
-      const changePercent =
-        previousTotal > 0
-          ? parseFloat((((latestTotal - previousTotal) / previousTotal) * 100).toFixed(1))
-          : 0;
-
-      return res.json({
-        data,
-        summary: {
-          latestTotal,
-          previousTotal,
-          changePercent,
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-// ─── GET /api/analytics/ai-usage ──────────────────────────────────────────────
-router.get(
-  '/ai-usage',
-  authenticate,
-  authorize('admin', 'hr_manager'),
-  async (req: AuthRequest, res: Response, next) => {
-    try {
-      const tenantId = req.user!.tenantId;
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
-      // Fetch API usage logs for the tenant's API keys
-      const apiKeys = await prisma.apiKey.findMany({
-        where: { tenantId, isActive: true },
-        select: { id: true },
+      // Anomaly count
+      const anomalyCount = await prisma.attendanceAnomaly.count({
+        where: { tenantId, status: 'PENDING' },
       });
 
-      const apiKeyIds = apiKeys.map((k) => k.id);
+      // Attendance count this month
+      const attendanceCount = await prisma.attendanceRecord.count({
+        where: { tenantId, date: { gte: monthStart, lte: monthEnd } },
+      });
 
-      const [usageLogs, anomalyCount, activeUserCount] = await Promise.all([
-        apiKeyIds.length > 0
-          ? prisma.apiUsageLog.findMany({
-              where: {
-                apiKeyId: { in: apiKeyIds },
-                calledAt: { gte: thirtyDaysAgo },
-              },
-            })
-          : Promise.resolve([]),
-        prisma.anomaly.count({
-          where: {
-            tenantId,
-            detectedAt: { gte: thirtyDaysAgo },
-          },
-        }),
-        prisma.activityLog.groupBy({
-          by: ['userId'],
-          where: {
-            tenantId,
-            createdAt: { gte: thirtyDaysAgo },
-          },
-        }),
-      ]);
+      const totalPayroll = payrollRecords.reduce((sum: number, log: any) => sum + (log.netPay ?? 0), 0);
 
-      const totalPredictions = usageLogs.length + anomalyCount;
-      const avgResponseTime =
-        usageLogs.length > 0
-          ? Math.round(
-              usageLogs.reduce((sum, log) => sum + log.responseTimeMs, 0) / usageLogs.length
-            )
-          : 0;
+      // Average payroll per employee
+      const avgPayroll = totalEmployees > 0 ? Math.round(totalPayroll / totalEmployees) : 0;
 
-      const successfulCalls = usageLogs.filter((l) => l.statusCode >= 200 && l.statusCode < 300);
-      const avgAccuracy =
-        usageLogs.length > 0
-          ? parseFloat(((successfulCalls.length / usageLogs.length) * 100).toFixed(1))
-          : 0;
+      const topDepartments = await prisma.employee.groupBy({
+        by: ['department'],
+        where: { tenantId, deletedAt: null, status: 'ACTIVE' },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 5,
+      });
 
-      const activeUsers = activeUserCount.length;
-
-      // Categorize endpoint usage into model categories
-      const endpointCategories: Record<string, { name: string; color: string }> = {
-        turnover: { name: '이직 위험 예측', color: '#FF6384' },
-        anomaly: { name: '이상 탐지', color: '#36A2EB' },
-        cost: { name: '비용 분석', color: '#FFCE56' },
-        performance: { name: '성과 예측', color: '#4BC0C0' },
-        other: { name: '기타 분석', color: '#9966FF' },
-      };
-
-      const modelCounts: Record<string, number> = {
-        turnover: 0,
-        anomaly: anomalyCount,
-        cost: 0,
-        performance: 0,
-        other: 0,
-      };
-
-      for (const log of usageLogs) {
-        const ep = log.endpoint.toLowerCase();
-        if (ep.includes('turnover') || ep.includes('risk')) {
-          modelCounts.turnover++;
-        } else if (ep.includes('anomal')) {
-          modelCounts.anomaly++;
-        } else if (ep.includes('cost') || ep.includes('payroll')) {
-          modelCounts.cost++;
-        } else if (ep.includes('performance') || ep.includes('okr')) {
-          modelCounts.performance++;
-        } else {
-          modelCounts.other++;
-        }
-      }
-
-      const modelUsage = Object.entries(modelCounts)
-        .filter(([, value]) => value > 0)
-        .map(([key, value]) => ({
-          name: endpointCategories[key].name,
-          value,
-          color: endpointCategories[key].color,
-        }));
-
-      // If no usage data, provide default model distribution
-      if (modelUsage.length === 0) {
-        modelUsage.push(
-          { name: '이직 위험 예측', value: 0, color: '#FF6384' },
-          { name: '이상 탐지', value: 0, color: '#36A2EB' },
-          { name: '비용 분석', value: 0, color: '#FFCE56' },
-          { name: '성과 예측', value: 0, color: '#4BC0C0' }
-        );
-      }
-
-      // Generate insights based on actual data
-      const insights: { id: string; text: string; type: string }[] = [];
-
-      if (anomalyCount > 0) {
-        insights.push({
-          id: 'insight-anomaly-count',
-          text: `최근 30일간 ${anomalyCount}건의 이상 징후가 탐지되었습니다.`,
-          type: 'warning',
-        });
-      }
-
-      if (avgAccuracy >= 90) {
-        insights.push({
-          id: 'insight-accuracy',
-          text: `AI 모델 정확도가 ${avgAccuracy}%로 높은 수준을 유지하고 있습니다.`,
-          type: 'success',
-        });
-      } else if (avgAccuracy > 0 && avgAccuracy < 80) {
-        insights.push({
-          id: 'insight-accuracy-low',
-          text: `AI 모델 정확도가 ${avgAccuracy}%로 개선이 필요합니다.`,
-          type: 'warning',
-        });
-      }
-
-      if (activeUsers > 0) {
-        insights.push({
-          id: 'insight-active-users',
-          text: `최근 30일간 ${activeUsers}명의 사용자가 시스템을 활용했습니다.`,
-          type: 'info',
-        });
-      }
-
-      if (totalPredictions === 0) {
-        insights.push({
-          id: 'insight-no-data',
-          text: 'AI 분석 데이터가 아직 충분하지 않습니다. 데이터가 축적되면 더 정확한 인사이트를 제공합니다.',
-          type: 'info',
-        });
-      }
+      const departmentBreakdown = topDepartments.map((l: any) => ({
+        department: l.department,
+        count: l._count.id,
+      }));
 
       return res.json({
         data: {
-          totalPredictions,
-          avgAccuracy,
-          avgResponseTime,
-          activeUsers,
-          modelUsage,
-          insights,
+          totalEmployees,
+          totalPayroll,
+          avgPayroll,
+          anomalyCount,
+          attendanceCount,
+          departmentBreakdown,
         },
       });
     } catch (err) {
