@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { validate } from '../middleware/validate.js';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth.js';
 import { parsePagination, paginatedResponse } from '../lib/pagination.js';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 
 const router = Router();
 
@@ -97,7 +97,7 @@ router.get(
   }
 );
 
-// ─── GET /api/users/:userId — 특정 사용자 상세 조회 ──────
+// ─── GET /api/users/:userId — 사용자 상세 조회 ──────────
 
 router.get(
   '/:userId',
@@ -105,11 +105,9 @@ router.get(
   authorize('admin'),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { userId } = req.params;
-
-      const user = await prisma.user.findFirst({
+      const user = await prisma.user.findUnique({
         where: {
-          id: userId,
+          id: req.params.userId,
           tenantId: req.user!.tenantId,
           deletedAt: null,
         },
@@ -125,26 +123,16 @@ router.get(
           twoFactorEnabled: true,
           isActive: true,
           lastPasswordChange: true,
+          permissions: true,
           createdAt: true,
           updatedAt: true,
           tenantId: true,
-          employee: {
-            select: {
-              id: true,
-              employeeNumber: true,
-              department: true,
-              position: true,
-              hireDate: true,
-              employmentType: true,
-              status: true,
-            },
-          },
-          notificationSettings: true,
         },
       });
 
       if (!user) {
-        throw Object.assign(new Error('사용자를 찾을 수 없습니다'), { status: 404 });
+        res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+        return;
       }
 
       return res.json({ data: user });
@@ -154,7 +142,7 @@ router.get(
   }
 );
 
-// ─── POST /api/users — 새 사용자 생성 ───────────────────
+// ─── POST /api/users — 사용자 생성 ──────────────────────
 
 router.post(
   '/',
@@ -165,79 +153,38 @@ router.post(
     try {
       const { email, password, name, role, department, position, tenantId } = req.body;
 
-      // 요청자의 테넌트와 일치하는지 확인
-      if (tenantId !== req.user!.tenantId) {
-        throw Object.assign(new Error('다른 테넌트에 사용자를 생성할 수 없습니다'), { status: 403 });
-      }
+      const hashedPassword = await bcrypt.hash(password, 12);
 
-      // 이메일 중복 확인
-      const existingUser = await prisma.user.findUnique({
-        where: { email },
+      const user = await prisma.user.create({
+        data: {
+          email,
+          password: hashedPassword,
+          name,
+          role,
+          department: department || null,
+          position: position || null,
+          tenantId,
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          department: true,
+          position: true,
+          tenantId: true,
+          createdAt: true,
+        },
       });
 
-      if (existingUser) {
-        throw Object.assign(new Error('이미 사용 중인 이메일입니다'), { status: 409 });
-      }
-
-      // 테넌트 사용자 수 제한 확인
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: tenantId },
-        select: { userCount: true, maxUsers: true },
-      });
-
-      if (!tenant) {
-        throw Object.assign(new Error('테넌트를 찾을 수 없습니다'), { status: 404 });
-      }
-
-      if (tenant.userCount >= tenant.maxUsers) {
-        throw Object.assign(new Error('테넌트의 최대 사용자 수에 도달했습니다'), { status: 403 });
-      }
-
-      const SALT_ROUNDS = 12;
-      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-
-      const [newUser] = await prisma.$transaction([
-        prisma.user.create({
-          data: {
-            email,
-            password: hashedPassword,
-            name,
-            role: role as 'USER' | 'ADMIN',
-            department,
-            position,
-            tenantId,
-          },
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            role: true,
-            phone: true,
-            department: true,
-            position: true,
-            avatarUrl: true,
-            twoFactorEnabled: true,
-            isActive: true,
-            lastPasswordChange: true,
-            createdAt: true,
-            updatedAt: true,
-            tenantId: true,
-          },
-        }),
-        prisma.tenant.update({
-          where: { id: tenantId },
-          data: { userCount: { increment: 1 } },
-        }),
-      ]);
-
-      return res.status(201).json({ data: newUser });
+      return res.status(201).json({ data: user });
     } catch (err) {
       next(err);
     }
   }
 );
 
-// ─── PUT /api/users/:userId — 사용자 정보 수정 ──────────
+// ─── PUT /api/users/:userId — 사용자 수정 ───────────────
 
 router.put(
   '/:userId',
@@ -246,58 +193,34 @@ router.put(
   validate(updateUserSchema),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { userId } = req.params;
-      const { name, role, department, position } = req.body;
-
-      // 대상 사용자 존재 확인 (같은 테넌트)
-      const existingUser = await prisma.user.findFirst({
+      const user = await prisma.user.update({
         where: {
-          id: userId,
+          id: req.params.userId,
           tenantId: req.user!.tenantId,
           deletedAt: null,
         },
-      });
-
-      if (!existingUser) {
-        throw Object.assign(new Error('사용자를 찾을 수 없습니다'), { status: 404 });
-      }
-
-      const updateData: Record<string, unknown> = {};
-
-      if (name !== undefined) updateData.name = name;
-      if (role !== undefined) updateData.role = role as 'USER' | 'ADMIN';
-      if (department !== undefined) updateData.department = department;
-      if (position !== undefined) updateData.position = position;
-
-      const updatedUser = await prisma.user.update({
-        where: { id: userId },
-        data: updateData,
+        data: req.body,
         select: {
           id: true,
           email: true,
           name: true,
           role: true,
-          phone: true,
           department: true,
           position: true,
-          avatarUrl: true,
-          twoFactorEnabled: true,
-          isActive: true,
-          lastPasswordChange: true,
-          createdAt: true,
-          updatedAt: true,
+          permissions: true,
           tenantId: true,
+          updatedAt: true,
         },
       });
 
-      return res.json({ data: updatedUser });
+      return res.json({ data: user });
     } catch (err) {
       next(err);
     }
   }
 );
 
-// ─── DELETE /api/users/:userId — 사용자 삭제 (비활성화) ──
+// ─── DELETE /api/users/:userId — 사용자 삭제 (소프트) ────
 
 router.delete(
   '/:userId',
@@ -305,44 +228,16 @@ router.delete(
   authorize('admin'),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { userId } = req.params;
-
-      // 자기 자신은 삭제 불가
-      if (userId === req.user!.id) {
-        throw Object.assign(new Error('자기 자신을 삭제할 수 없습니다'), { status: 400 });
-      }
-
-      const existingUser = await prisma.user.findFirst({
+      await prisma.user.update({
         where: {
-          id: userId,
+          id: req.params.userId,
           tenantId: req.user!.tenantId,
           deletedAt: null,
         },
+        data: { deletedAt: new Date() },
       });
 
-      if (!existingUser) {
-        throw Object.assign(new Error('사용자를 찾을 수 없습니다'), { status: 404 });
-      }
-
-      await prisma.$transaction([
-        prisma.user.update({
-          where: { id: userId },
-          data: {
-            isActive: false,
-            deletedAt: new Date(),
-          },
-        }),
-        prisma.refreshToken.updateMany({
-          where: { userId },
-          data: { isRevoked: true },
-        }),
-        prisma.tenant.update({
-          where: { id: req.user!.tenantId },
-          data: { userCount: { decrement: 1 } },
-        }),
-      ]);
-
-      return res.status(204).end();
+      return res.status(204).send();
     } catch (err) {
       next(err);
     }
