@@ -1,0 +1,21 @@
+// NOTE: Append this model to your main schema.prisma file
+// This is the CustomRole model required by src/routes/roles.ts
+
+// model CustomRole {
+//   id          String    @id @default(cuid())
+//   name        String
+//   permissions String[]
+//   deletedAt   DateTime?
+//   createdAt   DateTime  @default(now())
+//   updatedAt   DateTime  @updatedAt
+//
+//   tenantId    String
+//   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+//
+//   @@unique([tenantId, name])
+//   @@index([tenantId])
+//   @@index([deletedAt])
+// }
+//
+// Also add to the Tenant model:
+//   customRoles CustomRole[]

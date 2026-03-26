@@ -1,0 +1,616 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  RESIGNED
+  TERMINATED
+}
+
+enum AttendanceStatus {
+  NORMAL
+  LATE
+  EARLY_LEAVE
+  ABSENT
+  HALF_DAY
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PayrollStatus {
+  DRAFT
+  CALCULATED
+  CONFIRMED
+  PAID
+}
+
+enum OKRStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ReviewStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  COMPLETED
+}
+
+enum ContractStatus {
+  PENDING
+  SIGNED
+  EXPIRED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentMethodType {
+  CREDIT_CARD
+  BANK_ACCOUNT
+}
+
+enum AnomalyCategory {
+  ATTENDANCE
+  PAYROLL
+  PERFORMANCE
+  TURNOVER_RISK
+}
+
+enum AnomalySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ActivityAction {
+  LOGIN
+  LOGOUT
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  DOWNLOAD
+  SIGN
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+model Tenant {
+  id                 String             @id @default(cuid())
+  name               String
+  country            String
+  language           String             @default("ko")
+  currency           String             @default("KRW")
+  timezone           String             @default("Asia/Seoul")
+  businessType       String
+  adminEmail         String
+  userCount          Int                @default(0)
+  maxUsers           Int                @default(50)
+  subscriptionPlan   SubscriptionPlan   @default(FREE)
+  subscriptionStatus SubscriptionStatus @default(TRIAL)
+  features           String[]
+  ssoEnabled         Boolean            @default(false)
+  mfaRequired        Boolean            @default(false)
+  deletedAt          DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  users              User[]
+  employees          Employee[]
+  departments        Department[]
+  attendanceRecords  AttendanceRecord[]
+  leaveRequests      LeaveRequest[]
+  payrollRecords     PayrollRecord[]
+  okrs               OKR[]
+  performanceReviews PerformanceReview[]
+  contracts          Contract[]
+  subscriptions      Subscription[]
+  invoices           Invoice[]
+  paymentMethods     PaymentMethod[]
+  apiKeys            ApiKey[]
+  integrationSettings IntegrationSetting[]
+  anomalies          Anomaly[]
+  activityLogs       ActivityLog[]
+
+  @@index([subscriptionPlan])
+  @@index([subscriptionStatus])
+  @@index([deletedAt])
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  password           String
+  name               String
+  role               Role      @default(USER)
+  phone              String?
+  department         String?
+  position           String?
+  avatarUrl          String?
+  twoFactorEnabled   Boolean   @default(false)
+  lastPasswordChange DateTime  @default(now())
+  isActive           Boolean   @default(true)
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenantId           String
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  employee           Employee?
+  activityLogs       ActivityLog[]
+  refreshTokens      RefreshToken[]
+  notificationSettings NotificationSetting?
+
+  @@index([tenantId])
+  @@index([role])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model Employee {
+  id              String         @id @default(cuid())
+  employeeNumber  String         @unique
+  name            String
+  email           String
+  department      String
+  position        String
+  hireDate        DateTime
+  salary          Float
+  employmentType  String         @default("정규직")
+  status          EmployeeStatus @default(ACTIVE)
+  deletedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  tenantId        String
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId          String?        @unique
+  user            User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  attendanceRecords AttendanceRecord[]
+  leaveRequests     LeaveRequest[]
+  payrollRecords    PayrollRecord[]
+  okrs              OKR[]
+  performanceReviews PerformanceReview[]
+  contracts         Contract[]
+
+  @@index([tenantId])
+  @@index([department])
+  @@index([status])
+  @@index([hireDate])
+  @@index([deletedAt])
+  @@index([tenantId, department])
+}
+
+model Department {
+  id            String    @id @default(cuid())
+  name          String
+  managerId     String?
+  employeeCount Int       @default(0)
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([deletedAt])
+}
+
+model AttendanceRecord {
+  id               String           @id @default(cuid())
+  date             DateTime
+  clockIn          DateTime?
+  clockOut         DateTime?
+  status           AttendanceStatus @default(NORMAL)
+  overtimeMinutes  Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  employeeId       String
+  employee         Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  tenantId         String
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([tenantId])
+  @@index([date])
+  @@index([status])
+  @@index([tenantId, date])
+  @@index([employeeId, date])
+}
+
+model LeaveRequest {
+  id          String      @id @default(cuid())
+  leaveType   String
+  startDate   DateTime
+  endDate     DateTime
+  days        Float
+  reason      String
+  status      LeaveStatus @default(PENDING)
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  requestedAt DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  employeeId  String
+  employee    Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([startDate])
+  @@index([tenantId, status])
+}
+
+model PayrollRecord {
+  id                  String        @id @default(cuid())
+  month               String
+  baseSalary          Float
+  overtimePay         Float         @default(0)
+  bonus               Float         @default(0)
+  mealAllowance       Float         @default(0)
+  transportAllowance  Float         @default(0)
+  nationalPension     Float         @default(0)
+  healthInsurance     Float         @default(0)
+  employmentInsurance Float         @default(0)
+  incomeTax           Float         @default(0)
+  localIncomeTax      Float         @default(0)
+  totalEarnings       Float
+  totalDeductions     Float
+  netPay              Float
+  payDate             DateTime?
+  status              PayrollStatus @default(DRAFT)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  employeeId          String
+  employee            Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  tenantId            String
+  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([tenantId])
+  @@index([month])
+  @@index([status])
+  @@index([tenantId, month])
+}
+
+model OKR {
+  id              String    @id @default(cuid())
+  quarter         String
+  objectives      Json
+  overallProgress Float     @default(0)
+  status          OKRStatus @default(IN_PROGRESS)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  employeeId      String
+  employee        Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([tenantId])
+  @@index([quarter])
+  @@index([status])
+  @@index([tenantId, quarter])
+}
+
+model PerformanceReview {
+  id              String       @id @default(cuid())
+  reviewPeriod    String
+  overallScore    Float?
+  selfAssessment  Json?
+  managerReview   Json?
+  goals           Json?
+  strengths       String?
+  improvements    String?
+  comments        String?
+  reviewerId      String?
+  status          ReviewStatus @default(DRAFT)
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  employeeId      String
+  employee        Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  tenantId        String
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([reviewPeriod])
+  @@index([tenantId, reviewPeriod])
+}
+
+model Contract {
+  id             String         @id @default(cuid())
+  title          String
+  type           String
+  fileUrl        String
+  status         ContractStatus @default(PENDING)
+  signedAt       DateTime?
+  expiresAt      DateTime?
+  signatureData  String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  employeeId     String
+  employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  tenantId       String
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([tenantId])
+  @@index([status])
+}
+
+model Subscription {
+  id             String             @id @default(cuid())
+  plan           SubscriptionPlan
+  status         SubscriptionStatus @default(TRIAL)
+  startDate      DateTime           @default(now())
+  endDate        DateTime?
+  trialEndsAt    DateTime?
+  monthlyPrice   Float              @default(0)
+  billingCycle   String             @default("monthly")
+  cancelledAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  tenantId       String
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([plan])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  invoiceNumber  String        @unique
+  amount         Float
+  tax            Float         @default(0)
+  totalAmount    Float
+  currency       String        @default("KRW")
+  status         InvoiceStatus @default(PENDING)
+  issuedAt       DateTime      @default(now())
+  dueDate        DateTime
+  paidAt         DateTime?
+  periodStart    DateTime
+  periodEnd      DateTime
+  items          Json
+  pdfUrl         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([issuedAt])
+  @@index([dueDate])
+  @@index([tenantId, status])
+}
+
+model PaymentMethod {
+  id             String            @id @default(cuid())
+  type           PaymentMethodType
+  label          String
+  last4          String
+  expiryMonth    Int?
+  expiryYear     Int?
+  bankName       String?
+  isDefault      Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  tenantId       String
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([isDefault])
+}
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  name           String
+  keyHash        String    @unique
+  prefix         String
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  isActive       Boolean   @default(true)
+  requestCount   Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  usageLogs      ApiUsageLog[]
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@index([keyHash])
+}
+
+model ApiUsageLog {
+  id             String   @id @default(cuid())
+  endpoint       String
+  method         String
+  statusCode     Int
+  responseTimeMs Int
+  calledAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  apiKeyId       String
+  apiKey         ApiKey   @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId])
+  @@index([calledAt])
+  @@index([endpoint])
+}
+
+model IntegrationSetting {
+  id             String   @id @default(cuid())
+  provider       String
+  isEnabled      Boolean  @default(false)
+  config         Json     @default("{}")
+  lastSyncAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+}
+
+model Anomaly {
+  id             String          @id @default(cuid())
+  category       AnomalyCategory
+  severity       AnomalySeverity @default(MEDIUM)
+  title          String
+  description    String
+  employeeId     String?
+  department     String?
+  data           Json?
+  isDismissed    Boolean         @default(false)
+  dismissedBy    String?
+  dismissedAt    DateTime?
+  detectedAt     DateTime        @default(now())
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  tenantId       String
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([category])
+  @@index([severity])
+  @@index([isDismissed])
+  @@index([tenantId, category])
+  @@index([detectedAt])
+}
+
+model ActivityLog {
+  id             String         @id @default(cuid())
+  action         ActivityAction
+  resource       String
+  resourceId     String?
+  description    String?
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tenantId       String
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([action])
+  @@index([resource])
+  @@index([createdAt])
+  @@index([tenantId, createdAt])
+}
+
+model RefreshToken {
+  id             String   @id @default(cuid())
+  token          String   @unique
+  expiresAt      DateTime
+  isRevoked      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@index([isRevoked])
+}
+
+model NotificationSetting {
+  id                    String  @id @default(cuid())
+  emailNotifications    Boolean @default(true)
+  pushNotifications     Boolean @default(true)
+  leaveApproval         Boolean @default(true)
+  payrollReady          Boolean @default(true)
+  performanceReview     Boolean @default(true)
+  anomalyAlert          Boolean @default(true)
+  systemAnnouncement    Boolean @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  userId                String  @unique
+  user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

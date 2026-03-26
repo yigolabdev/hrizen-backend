@@ -1,0 +1,38 @@
+import { Router } from 'express';
+import authRouter from './auth.js';
+import adminRouter from './admin.js';
+import tenantsRouter from './tenants.js';
+import usersRouter from './users.js';
+import rolesRouter from './roles.js';
+import attendanceRouter from './attendance.js';
+import payrollRouter from './payroll.js';
+import performanceRouter from './performance.js';
+import essRouter from './ess.js';
+import analyticsRouter from './analytics.js';
+import apiKeysRouter from './api-keys.js';
+import integrationsRouter from './integrations.js';
+import subscriptionsRouter from './subscriptions.js';
+import billingRouter from './billing.js';
+import meRouter from './me.js';
+import departmentsRouter from './departments.js';
+import employeesRouter from './employees.js';
+
+export const router = Router();
+
+router.use('/auth', authRouter);
+router.use('/admin', adminRouter);
+router.use('/tenants', tenantsRouter);
+router.use('/users', usersRouter);
+router.use('/roles', rolesRouter);
+router.use('/attendance', attendanceRouter);
+router.use('/payroll', payrollRouter);
+router.use('/performance', performanceRouter);
+router.use('/ess', essRouter);
+router.use('/analytics', analyticsRouter);
+router.use('/api-keys', apiKeysRouter);
+router.use('/integrations', integrationsRouter);
+router.use('/subscriptions', subscriptionsRouter);
+router.use('/billing', billingRouter);
+router.use('/me', meRouter);
+router.use('/departments', departmentsRouter);
+router.use('/employees', employeesRouter);

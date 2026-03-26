@@ -1,0 +1,25 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: hrizen
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - '4000:4000'
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/hrizen
+      JWT_SECRET: dev-secret
+      CORS_ORIGIN: http://localhost:5173
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
